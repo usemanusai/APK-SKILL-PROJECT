@@ -1,0 +1,210 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, system-ui, -apple-system, sans-serif;
+  --code-bg: rgba(0, 255, 200, 0.04);
+  --code-border: rgba(0, 255, 200, 0.12);
+}
+
+body {
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+button, select, textarea {
+  font: inherit;
+}
+
+/* Scrollbar hide utility */
+.scrollbar-hide::-webkit-scrollbar { display: none; }
+.scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* Code blocks */
+.code-block {
+  position: relative;
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 12px;
+  padding: 16px 16px 16px 16px;
+  overflow-x: auto;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #a5f3d0;
+  margin: 12px 0;
+  white-space: pre;
+}
+
+.code-block code {
+  display: block;
+}
+
+.copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  color: #94a3b8;
+  font-size: 11px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: inherit;
+}
+
+.copy-btn:hover {
+  background: rgba(34, 211, 238, 0.15);
+  color: #67e8f9;
+  border-color: rgba(34, 211, 238, 0.3);
+}
+
+/* Inline code */
+.inline-code {
+  background: rgba(34, 211, 238, 0.08);
+  border: 1px solid rgba(34, 211, 238, 0.15);
+  border-radius: 6px;
+  padding: 1px 6px;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.85em;
+  color: #67e8f9;
+}
+
+/* Guide cards */
+.guide-card {
+  backdrop-filter: blur(12px);
+}
+
+.guide-card + .guide-card {
+  margin-top: 8px;
+}
+
+.guide-body h3,
+.guide-body h4 {
+  letter-spacing: -0.01em;
+}
+
+.guide-body blockquote {
+  border-radius: 8px;
+  background: rgba(34, 211, 238, 0.04);
+}
+
+/* Chat area */
+.chat-area {
+  scroll-behavior: smooth;
+}
+
+/* Select dropdown styling */
+select option {
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+/* Focus ring */
+*:focus-visible {
+  outline: 2px solid rgba(34, 211, 238, 0.5);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+/* Animation for loading dots */
+@keyframes bounce {
+  0%, 80%, 100% { transform: translateY(0); }
+  40% { transform: translateY(-4px); }
+}
+
+.animate-bounce {
+  animation: bounce 1.4s infinite;
+}
+
+/* Table inside guide */
+.guide-body table {
+  border-collapse: collapse;
+}
+
+.guide-body th:first-child,
+.guide-body td:first-child {
+  padding-left: 0;
+}
+
+/* File Editor */
+.editor-textarea {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  tab-size: 4;
+}
+
+/* Mod cards */
+.mod-card-applied {
+  box-shadow: 0 0 12px rgba(52, 211, 153, 0.15);
+}
+
+.mod-card-available:hover {
+  box-shadow: 0 0 12px rgba(34, 211, 238, 0.15);
+}
+
+/* Diff view */
+.diff-line-added {
+  background: rgba(16, 185, 129, 0.1);
+  border-left: 3px solid #10b981;
+}
+
+.diff-line-removed {
+  background: rgba(239, 68, 68, 0.1);
+  border-left: 3px solid #ef4444;
+}
+
+.diff-line-same {
+  border-left: 3px solid transparent;
+}
+
+/* Color input styling */
+input[type="color"] {
+  -webkit-appearance: none;
+  border: none;
+}
+
+input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+
+input[type="color"]::-webkit-color-swatch {
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+/* APK Import */
+#apk-drop-zone {
+  transition: all 0.2s ease;
+}
+
+#apk-drop-zone:hover {
+  background: rgba(34, 211, 238, 0.03);
+}
+
+.apk-file-entry {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 11px;
+}
+
+/* APK progress animation */
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.apk-mod-card:hover {
+  box-shadow: 0 0 16px rgba(34, 211, 238, 0.12);
+}
+
+/* GitHub-style diff view */
+.diff-line-added { background: rgba(16, 185, 129, 0.08); }
+.diff-line-removed { background: rgba(239, 68, 68, 0.08); }
+.diff-line-same { background: transparent; }
+.diff-line-added td, .diff-line-removed td, .diff-line-same td { padding-top: 1px; padding-bottom: 1px; }
+
+/* Mod expand animation */
+.mod-expanded-content { animation: slideDown 0.2s ease-out; }
+@keyframes slideDown {
+  from { opacity: 0; max-height: 0; }
+  to { opacity: 1; max-height: 2000px; }
+}
