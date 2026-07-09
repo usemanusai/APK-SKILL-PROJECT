@@ -1,5 +1,12 @@
 // state.js - Central state management
+import { getSettings, setLastModelId } from './ui/ai-settings-storage.js';
+
 var DEFAULT_MODEL = '2a90c2e2-e87d-4f6a-be9a-108c25c6ad64'; // DeepSeek V3.2
+
+// Any of these fields holding a model id means the user actively picked a
+// model somewhere in the app; remember it as "last used" for the active
+// provider so it's restored automatically next time (see ai-settings-storage.js).
+var MODEL_ID_KEYS = ['selectedModelId', 'aiModelId', 'apkChatModelId'];
 
 var state = {
   activeTab: 'guides',
@@ -95,6 +102,12 @@ export function setState(patch) {
     state.editorLastContent = state.editorContent;
   }
   Object.assign(state, patch);
+  for (var mi = 0; mi < MODEL_ID_KEYS.length; mi++) {
+    var key = MODEL_ID_KEYS[mi];
+    if (key in patch && patch[key]) {
+      try { setLastModelId(getSettings().provider, patch[key]); } catch (e) { /* best-effort */ }
+    }
+  }
   for (var i = 0; i < listeners.length; i++) {
     try { listeners[i](state); } catch (e) { console.warn('Listener error:', e); }
   }

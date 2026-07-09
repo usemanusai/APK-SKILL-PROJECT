@@ -1,13 +1,16 @@
 <!DOCTYPE html><html lang="en" dir="ltr"><head><link rel="preload" href="_miniapp/i18n/manifest.json" as="fetch" type="application/json" crossorigin="anonymous">
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Analyze, decompile, and modify APK structure with AI-assisted guidance — built-in models or your own OpenRouter.ai key.">
+  <meta name="theme-color" content="#020617">
   <title>APK Structure Analyzer</title>
   <script src="https://miniapps.ai/sdk/miniapps-ai-v1.js"></script><script src="https://miniapps.ai/sdk/miniapp-i18n-v1.js"></script><script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body class="min-h-screen bg-slate-950 text-slate-100">
-  <div id="app" class="mx-auto flex min-h-screen max-w-3xl flex-col px-4 py-8">
+  <div class="app-bg" aria-hidden="true"></div>
+  <div id="app" class="relative mx-auto flex min-h-screen max-w-3xl flex-col px-4 py-8">
     <header id="app-header"></header>
 
     <div id="search-wrap" class="mb-4"></div>
