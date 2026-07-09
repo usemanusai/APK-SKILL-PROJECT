@@ -18,6 +18,45 @@ function referer() {
   try { return window.location.href; } catch (e) { return 'https://apk-structure-analyzer.miniapps.ai'; }
 }
 
+var DEFAULT_MAX_RETRIES = 2;
+var DEFAULT_RETRY_BASE_DELAY_MS = 500;
+var RETRY_DELAY_CAP_MS = 4000;
+
+function wait(ms) {
+  return new Promise(function(resolve) { setTimeout(resolve, ms); });
+}
+
+// Exponential backoff with a small amount of jitter, capped so a long
+// multi-phase workflow never stalls too long on a single transient blip.
+function computeRetryDelay(attemptNumber, baseDelayMs) {
+  var exp = baseDelayMs * Math.pow(2, attemptNumber);
+  var capped = Math.min(exp, RETRY_DELAY_CAP_MS);
+  var jitter = Math.random() * (capped * 0.15);
+  return Math.round(capped + jitter);
+}
+
+// Best-effort classification of miniappsAI SDK errors: only retry things that
+// look transient (network hiccup, timeout, or a 429/5xx-ish status if the
+// SDK's error shape exposes one). Errors that are clearly user/config issues
+// (bad request, unauthorized, or the SDK being unavailable) are not retried
+// since another attempt won't change the outcome.
+function isTransientMiniappsError(err) {
+  if (!err) return true;
+  var status = err.status || (err.response && err.response.status) || err.statusCode;
+  if (status) {
+    return status === 429 || status >= 500;
+  }
+  var msg = String((err && err.message) || err || '').toLowerCase();
+  if (!msg) return true;
+  if (msg.indexOf('unavailable') >= 0 && msg.indexOf('sdk') >= 0) return false;
+  if (msg.indexOf('bad request') >= 0) return false;
+  if (msg.indexOf('invalid') >= 0) return false;
+  if (msg.indexOf('unauthorized') >= 0) return false;
+  if (msg.indexOf('forbidden') >= 0) return false;
+  if (msg.indexOf('not found') >= 0) return false;
+  return true;
+}
+
 export function getActiveProvider() {
   return settings.getSettings().provider;
 }
@@ -113,13 +152,33 @@ function normalizeOpenRouterModel(m) {
 // ---------- Chat completions ----------
 
 export function callModel(params) {
+  var maxRetries = (params && params.maxRetries != null) ? params.maxRetries : DEFAULT_MAX_RETRIES;
+  var retryBaseDelayMs = (params && params.retryBaseDelayMs != null) ? params.retryBaseDelayMs : DEFAULT_RETRY_BASE_DELAY_MS;
+
   if (isOpenRouterActive()) {
-    return callOpenRouter(params);
+    return callOpenRouter(params, maxRetries, retryBaseDelayMs);
   }
-  if (!window.miniappsAI || typeof window.miniappsAI.callModel !== 'function') {
-    return Promise.reject(new Error('Built-in AI SDK is unavailable in this environment.'));
+  return callMiniappsAI(params, maxRetries, retryBaseDelayMs);
+}
+
+function callMiniappsAI(params, maxRetries, retryBaseDelayMs) {
+  function attempt(attemptNumber) {
+    if (!window.miniappsAI || typeof window.miniappsAI.callModel !== 'function') {
+      return Promise.reject(new Error('Built-in AI SDK is unavailable in this environment.'));
+    }
+    return Promise.resolve().then(function() {
+      return window.miniappsAI.callModel(params);
+    }).catch(function(err) {
+      if (attemptNumber < maxRetries && isTransientMiniappsError(err)) {
+        var delayMs = computeRetryDelay(attemptNumber, retryBaseDelayMs);
+        return wait(delayMs).then(function() {
+          return attempt(attemptNumber + 1);
+        });
+      }
+      throw err;
+    });
   }
-  return window.miniappsAI.callModel(params);
+  return attempt(0);
 }
 
 export function extractText(result) {
@@ -147,14 +206,21 @@ function extractOpenRouterText(result) {
   }
 }
 
-function callOpenRouter(params) {
+function callOpenRouter(params, maxRetries, retryBaseDelayMs) {
   var keys = settings.getKeys();
   if (!keys.length) {
     return Promise.reject(new Error('No OpenRouter API key configured. Add one in AI Provider Settings.'));
   }
 
+  if (maxRetries == null) maxRetries = DEFAULT_MAX_RETRIES;
+  if (retryBaseDelayMs == null) retryBaseDelayMs = DEFAULT_RETRY_BASE_DELAY_MS;
+
   var timeoutMs = params.timeoutMs || 60000;
   var startIndex = settings.getRotationIndex() % keys.length;
+  // maxRetries counts additional passes over the whole key pool, on top of
+  // trying every key once; caps total attempts so retries + key rotation
+  // never explode uncontrollably.
+  var maxAttempts = keys.length * (maxRetries + 1);
 
   function attemptWithKey(offset) {
     var idx = (startIndex + offset) % keys.length;
@@ -206,8 +272,14 @@ function callOpenRouter(params) {
         throw timeoutErr;
       }
       var retriable = err.status === 401 || err.status === 402 || err.status === 429 || (err.status && err.status >= 500);
-      if (retriable && offset + 1 < keys.length) {
-        return attemptWithKey(offset + 1);
+      if (retriable && offset + 1 < maxAttempts) {
+        if (maxRetries === 0) {
+          return attemptWithKey(offset + 1);
+        }
+        var delayMs = computeRetryDelay(offset, retryBaseDelayMs);
+        return wait(delayMs).then(function() {
+          return attemptWithKey(offset + 1);
+        });
       }
       throw err;
     });
