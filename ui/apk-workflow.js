@@ -758,7 +758,7 @@ function validateAndMerge(allMods, keyFiles) {
         // Anti-hallucination check: verify the specialist-generated diff actually
         // matches the real file content it claims to modify (not the truncated
         // prompt window — the full original from keyFiles).
-        var sourceEntry = keyFiles[finalTargetFile];
+        var sourceEntry = keyFiles[finalTargetFile] || keyFiles[validChanges[0].path];
         var sourceContent = sourceEntry && typeof sourceEntry.content === 'string' ? sourceEntry.content : null;
         var verification = verifyModDiff(finalDiff, sourceContent, { lineRange: finalLineRange });
         finalMod.confidence = verification.confidence;

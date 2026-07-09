@@ -363,6 +363,14 @@ function parseUnifiedDiffHunks(diffText) {
       continue;
     }
 
+    // Skip standard unified-diff metadata lines (git-style headers) so they
+    // aren't mistaken for implicit-hunk content — they start with -/+ but are
+    // not real removed/added file lines.
+    if (line.indexOf('--- ') === 0 || line.indexOf('+++ ') === 0 ||
+        line.indexOf('diff --git ') === 0 || line.indexOf('index ') === 0) {
+      continue;
+    }
+
     var prefix = line.charAt(0);
     if (!current) {
       if (prefix === '+' || prefix === '-' || prefix === ' ') {
@@ -389,9 +397,11 @@ function parseUnifiedDiffHunks(diffText) {
 
 // Finds the best-effort alignment of a hunk's "old side" lines within the real
 // file, allowing a small amount of line drift to tolerate minor reformatting.
+// Returns which specific old-line indices matched so the caller can score
+// removed ("-") lines separately from context (" ") lines.
 function findBestDiffAlignment(oldLinesNormalized, originalLinesNormalized, hint) {
   var total = oldLinesNormalized.length;
-  if (total === 0) return { matched: 0, total: 0 };
+  if (total === 0) return { matched: 0, total: 0, flags: [] };
 
   var n = originalLinesNormalized.length;
   var candidates = [];
@@ -422,25 +432,28 @@ function findBestDiffAlignment(oldLinesNormalized, originalLinesNormalized, hint
     if (!seen[candidates[ci]]) { seen[candidates[ci]] = true; uniq.push(candidates[ci]); }
   }
 
-  var bestMatched = 0;
+  var bestMatched = -1;
+  var bestFlags = null;
   for (var u = 0; u < uniq.length; u++) {
     var pos = uniq[u];
     var matched = 0;
+    var flags = new Array(oldLinesNormalized.length);
     for (var li = 0; li < oldLinesNormalized.length; li++) {
       var want = oldLinesNormalized[li];
-      if (want.length === 0) { matched++; continue; }
+      if (want.length === 0) { matched++; flags[li] = true; continue; }
       var found = false;
       for (var drift = 0; drift <= 3 && (pos + drift) < n; drift++) {
         if (originalLinesNormalized[pos + drift] === want) { pos += drift + 1; found = true; break; }
       }
+      flags[li] = found;
       if (found) matched++;
       else pos++;
     }
-    if (matched > bestMatched) bestMatched = matched;
+    if (matched > bestMatched) { bestMatched = matched; bestFlags = flags; }
     if (bestMatched === total) break;
   }
 
-  return { matched: bestMatched, total: total };
+  return { matched: bestMatched < 0 ? 0 : bestMatched, total: total, flags: bestFlags || [] };
 }
 
 // Verifies a mod's unified diff against the real original file content and
@@ -468,6 +481,8 @@ export function verifyModDiff(diff, originalContent, options) {
 
   var totalOld = 0;
   var totalMatched = 0;
+  var removedTotal = 0;
+  var removedMatched = 0;
   for (var hi = 0; hi < hunks.length; hi++) {
     var hunk = hunks[hi];
     var oldNorm = new Array(hunk.oldLines.length);
@@ -476,11 +491,30 @@ export function verifyModDiff(diff, originalContent, options) {
     var result = findBestDiffAlignment(oldNorm, originalNorm, hint);
     totalOld += result.total;
     totalMatched += result.matched;
+
+    // Score removed ("-") lines separately — these are the highest-stakes
+    // claims ("this exact code exists to be deleted"). Context lines matching
+    // alone is not sufficient proof; a diff can have accurate surrounding
+    // context but a hallucinated deletion.
+    for (var fi2 = 0; fi2 < hunk.oldLines.length; fi2++) {
+      if (hunk.oldLines[fi2].removed) {
+        removedTotal++;
+        if (result.flags[fi2]) removedMatched++;
+      }
+    }
   }
 
   var matchRatio = totalOld > 0 ? (totalMatched / totalOld) : 0;
-  var confidence = Math.round(30 + matchRatio * 60);
+  // If the diff has no removed lines (pure addition), there's nothing extra to
+  // penalize — fall back to the overall context match ratio.
+  var removedMatchRatio = removedTotal > 0 ? (removedMatched / removedTotal) : matchRatio;
+  var combinedRatio = removedTotal > 0 ? (matchRatio * 0.5 + removedMatchRatio * 0.5) : matchRatio;
+  var confidence = Math.round(30 + combinedRatio * 60);
   var notes = [];
+
+  if (removedTotal > 0 && removedMatchRatio < 0.6) {
+    notes.push((removedTotal - removedMatched) + '/' + removedTotal + ' removed ("-") lines were not found in the original file — likely hallucinated deletions.');
+  }
 
   if (lineRange) {
     var rangeMatch = String(lineRange).match(/(\d+)/);
@@ -497,14 +531,14 @@ export function verifyModDiff(diff, originalContent, options) {
   }
 
   confidence = Math.max(0, Math.min(100, confidence));
-  var verified = matchRatio >= 0.6 && confidence >= 65;
+  var verified = matchRatio >= 0.6 && removedMatchRatio >= 0.6 && confidence >= 65;
 
-  if (matchRatio >= 0.9) notes.unshift('Diff content strongly matches the original file (' + Math.round(matchRatio * 100) + '%).');
-  else if (matchRatio >= 0.6) notes.unshift('Diff content mostly matches the original file (' + Math.round(matchRatio * 100) + '%).');
-  else if (matchRatio > 0) notes.unshift('Diff content only partially matches the original file (' + Math.round(matchRatio * 100) + '%) — likely contains hallucinated or misplaced lines.');
+  if (combinedRatio >= 0.9) notes.unshift('Diff content strongly matches the original file (' + Math.round(combinedRatio * 100) + '%).');
+  else if (combinedRatio >= 0.6) notes.unshift('Diff content mostly matches the original file (' + Math.round(combinedRatio * 100) + '%).');
+  else if (combinedRatio > 0) notes.unshift('Diff content only partially matches the original file (' + Math.round(combinedRatio * 100) + '%) — likely contains hallucinated or misplaced lines.');
   else notes.unshift('Diff content does not match the original file at all — likely fully hallucinated.');
 
-  return { verified: verified, confidence: confidence, matchRatio: Math.round(matchRatio * 100) / 100, notes: notes };
+  return { verified: verified, confidence: confidence, matchRatio: Math.round(combinedRatio * 100) / 100, notes: notes };
 }
 
 // ── Robust JSON parsing ──
