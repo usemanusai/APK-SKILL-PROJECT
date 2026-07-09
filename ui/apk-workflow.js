@@ -522,6 +522,7 @@ function runRecon(modelId, userPrompt, onProgress) {
         safeProgress(onProgress, {
             phase: 'recon-done', attempt: 2, maxAttempts: 2 + MAX_BATCHES,
             message: 'Recon found ' + specs.length + ' mod opportunities (balanced client/server)! Dispatching specialists...',
+            newMods: specs.map(function(m) { return { label: m.label, category: m.category }; }),
         });
         return specs;
     });
@@ -656,6 +657,7 @@ function runSpecialistBatch(modelId, batch, keyFiles, onProgress, batchIndex, to
         safeProgress(onProgress, {
             phase: 'specialist-done', attempt: 2 + batchIndex + 1, maxAttempts: 2 + totalBatches,
             message: 'Specialist ' + batchIndex + '/' + totalBatches + ' [' + catLabel + '] generated ' + mods.length + ' mods!',
+            newMods: mods.map(function(m) { return { label: m.label, category: m.category }; }),
         });
         return mods;
     });

@@ -44,6 +44,7 @@ var state = {
   apkAttempt: 0,
   apkMaxAttempts: 3,
   apkProgressMsg: '',
+  apkDiscoveredMods: [],
   apkBuildReport: null,
   apkBuildError: null,
   apkShowFileBrowser: false,

@@ -85,6 +85,7 @@ export function runApkAnalysis() {
     apkAttempt: 0,
     apkMaxAttempts: 3,
     apkProgressMsg: t('app.apk.progressStarting'),
+    apkDiscoveredMods: [],
   });
 
   runAutonomousWorkflow(
@@ -95,11 +96,15 @@ export function runApkAnalysis() {
     s.apkKeyFiles,
     modelId,
     function(progress) {
-      setState({
+      var patch = {
         apkAttempt: progress.attempt,
         apkMaxAttempts: progress.maxAttempts,
         apkProgressMsg: progress.message,
-      });
+      };
+      if (progress.newMods && progress.newMods.length > 0) {
+        patch.apkDiscoveredMods = (getState().apkDiscoveredMods || []).concat(progress.newMods);
+      }
+      setState(patch);
       var progressEl = document.getElementById('apk-progress-text');
       if (progressEl) progressEl.textContent = progress.message;
     },
