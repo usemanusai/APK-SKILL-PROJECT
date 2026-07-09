@@ -48,6 +48,7 @@ var state = {
   apkBuildError: null,
   apkShowFileBrowser: false,
   apkExpandedMods: [],
+  apkCancelRequested: false,
   // Backend pipeline state
   pipelineBaseUrl: '',
   pipelineHealth: null,

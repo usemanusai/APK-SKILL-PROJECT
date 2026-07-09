@@ -17,6 +17,7 @@
 
 import { SYSTEM_PROMPT_PRIMARY } from '../ai-analysis.js';
 import { callModel as providerCallModel, extractText as providerExtractText } from '../ai-provider.js';
+import { getState } from '../../state.js';
 
 var t = function(key, vals) {
   var i18n = window.miniappI18n;
@@ -57,6 +58,17 @@ function safeError(err) {
   try {
     return err && err.message ? String(err.message) : 'Unknown error';
   } catch (_) { return 'Unknown error'; }
+}
+
+// ── Cancellation checkpoint helpers ──
+function isCancelRequested() {
+  try { return !!getState().apkCancelRequested; } catch (_) { return false; }
+}
+
+function cancellationError() {
+  var e = new Error('Operation cancelled by user');
+  e.cancelled = true;
+  return e;
 }
 
 function delay(ms) {
@@ -226,6 +238,10 @@ export function runSkillMdGenerationWorkflow(apk, manifest, selectedMods, modelI
   var startTime = Date.now();
   var modCount = modsToUse.length;
 
+  if (isCancelRequested()) {
+    return Promise.reject(cancellationError());
+  }
+
   var optStr = Object.keys(options).filter(k => options[k] !== false).join(', ') || 'all sections';
   safeProgress(onProg, {
     phase: 'init',
@@ -238,6 +254,9 @@ export function runSkillMdGenerationWorkflow(apk, manifest, selectedMods, modelI
 
   return callModel(modelId, SKILL_RECON_SYSTEM, reconPrompt, RECON_TIMEOUT)
     .then(raw => {
+      if (isCancelRequested()) {
+        throw cancellationError();
+      }
       var sections = parseJsonArrayRobust(raw) || [];
       safeProgress(onProg, {
         phase: 'recon-done',
@@ -261,6 +280,9 @@ export function runSkillMdGenerationWorkflow(apk, manifest, selectedMods, modelI
       return finalMd;
     })
     .catch(err => {
+      if (err && err.cancelled) {
+        return Promise.reject(err);
+      }
       console.error('SKILL.md workflow failed:', err);
       safeProgress(onProgress, {
         phase: 'fallback',
@@ -302,6 +324,9 @@ function buildReconPrompt(apk, manifest, mods, mode) {
 }
 
 function runAndroidMcpSpecialist(ctx, modelId, onProgress) {
+  if (isCancelRequested()) {
+    return Promise.reject(cancellationError());
+  }
   safeProgress(onProgress, {
     phase: 'android-mcp',
     message: 'Android-MCP Specialist writing precise device control + screenshot steps (scrcpy, ui_dump, file_push, app_install, etc.)...',
@@ -327,6 +352,9 @@ function runAndroidMcpSpecialist(ctx, modelId, onProgress) {
 }
 
 function runApkMcpSpecialist(ctx, modelId, onProgress) {
+  if (isCancelRequested()) {
+    return Promise.reject(cancellationError());
+  }
   safeProgress(onProgress, {
     phase: 'apk-mcp',
     message: 'APK-MCP Specialist writing exact mt_apk_* sequences for opening, editing and building (mt_apk_open, mt_apk_edit_text, mt_apk_edit_check, mt_apk_build, etc.)...',
@@ -352,6 +380,9 @@ function runApkMcpSpecialist(ctx, modelId, onProgress) {
 }
 
 function runPerModWriters(ctx, modelId, onProgress) {
+  if (isCancelRequested()) {
+    return Promise.reject(cancellationError());
+  }
   var mods = ctx.selectedMods;
   var total = mods.length;
   var results = [];
@@ -361,6 +392,9 @@ function runPerModWriters(ctx, modelId, onProgress) {
     var batch = mods.slice(i, i + MAX_BATCH);
     (function(b, startIdx) {
       chain = chain.then(() => {
+        if (isCancelRequested()) {
+          throw cancellationError();
+        }
         safeProgress(onProgress, {
           phase: 'per-mod',
           message: `Per-Mod Writer: ultra-detailed phone steps for "${b[0].label}" (${startIdx + 1}/${total}). This can take 6-10 minutes per mod for full precision.`,
@@ -408,6 +442,9 @@ function runPerModWriters(ctx, modelId, onProgress) {
 }
 
 function runAssembler(ctx, modelId, onProgress) {
+  if (isCancelRequested()) {
+    return Promise.reject(cancellationError());
+  }
   safeProgress(onProgress, {
     phase: 'assembly',
     message: 'Assembler combining all sections into final high-precision SKILL.md...',

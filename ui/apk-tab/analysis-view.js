@@ -176,5 +176,17 @@ function renderSquadProgress(container, state) {
   ));
 
   progress.appendChild(el('p', { className: 'text-[10px] text-slate-600 mt-1 text-center' }, t('app.apk.progressAnalyzing')));
+
+  // Cancel button — stops the in-flight workflow at the next safe checkpoint
+  var cancelling = !!state.apkCancelRequested;
+  progress.appendChild(el('button', {
+    id: 'apk-cancel-btn',
+    className: 'mt-2 px-4 py-1.5 rounded-full border border-rose-400/30 bg-rose-400/10 text-rose-300 text-xs font-bold transition hover:bg-rose-400/20 hover:border-rose-400/50 disabled:opacity-50 disabled:cursor-not-allowed',
+    disabled: cancelling,
+    onClick: function() {
+      setState({ apkCancelRequested: true });
+    },
+  }, cancelling ? 'Cancelling…' : 'Cancel'));
+
   container.appendChild(progress);
 }

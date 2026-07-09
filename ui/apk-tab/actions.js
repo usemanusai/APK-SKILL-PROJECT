@@ -80,6 +80,7 @@ export function runApkAnalysis() {
   setState({
     apkState: 'analyzing',
     apkError: null,
+    apkCancelRequested: false,
     // Keep existing mods visible during re-analysis — do NOT clear apkMods or apkAppliedMods
     apkAttempt: 0,
     apkMaxAttempts: 3,
@@ -139,6 +140,18 @@ export function runApkAnalysis() {
     showToast(t('app.apk.generatedToast', { count: newCount }) +
       (existingMods.length > 0 ? ' (' + merged.length + ' total)' : ''));
   })['catch'](function(error) {
+    if (error && error.cancelled) {
+      var existingModsOnCancel = s.apkMods || [];
+      setState({
+        apkState: existingModsOnCancel.length > 0 ? 'complete' : 'loaded',
+        apkCancelRequested: false,
+        apkAttempt: 0,
+        apkMaxAttempts: 3,
+        apkProgressMsg: '',
+      });
+      showToast('Analysis cancelled.');
+      return;
+    }
     console.error('APK analysis error:', error);
     var safeMsg = '';
     try {

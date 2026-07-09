@@ -16,6 +16,7 @@
 
 import { SYSTEM_PROMPT_PRIMARY, MOD_SIDE_CLASSIFICATION_RULES } from './ai-analysis.js';
 import { callModel as providerCallModel, extractText as providerExtractText } from './ai-provider.js';
+import { getState } from '../state.js';
 
 var t = function(key, vals) {
     var i18n = window.miniappI18n;
@@ -223,6 +224,17 @@ var SPECIALIST_SUFFIX =
 function safeProgress(onProgress, data) {
     if (!onProgress) return;
     try { onProgress(data); } catch (_) {}
+}
+
+// ── Cancellation checkpoint helpers ──
+function isCancelRequested() {
+    try { return !!getState().apkCancelRequested; } catch (_) { return false; }
+}
+
+function cancellationError() {
+    var e = new Error('Operation cancelled by user');
+    e.cancelled = true;
+    return e;
 }
 
 function safeErrorMessage(err) {
@@ -482,6 +494,9 @@ function parseReconResults(raw) {
 }
 
 function runRecon(modelId, userPrompt, onProgress) {
+    if (isCancelRequested()) {
+        return Promise.reject(cancellationError());
+    }
     safeProgress(onProgress, {
         phase: 'recon', attempt: 1, maxAttempts: 2 + MAX_BATCHES,
         message: 'Phase 1/3 — Recon agent scanning APK structure + file contents for mod opportunities (including server signals)...',
@@ -685,10 +700,14 @@ function runAllSpecialistBatches(modelId, reconMods, keyFiles, onProgress, serve
     for (var bi = 0; bi < batches.length; bi++) {
         (function(batch, idx) {
             chain = chain.then(function() {
+                if (isCancelRequested()) {
+                    throw cancellationError();
+                }
                 return runSpecialistBatch(modelId, batch, keyFiles, onProgress, idx + 1, totalBatches, serverSignals)
                     .then(function(mods) {
                         for (var mi = 0; mi < mods.length; mi++) allMods.push(mods[mi]);
                     })['catch'](function(err) {
+                        if (err && err.cancelled) { throw err; }
                         console.warn('Specialist batch ' + idx + ' failed:', err);
                         safeProgress(onProgress, {
                             phase: 'specialist-skip', attempt: 2 + idx + 1, maxAttempts: 2 + totalBatches,
@@ -944,6 +963,10 @@ export function runAutonomousWorkflow(zip, allFiles, categories, manifest, keyFi
         return Promise.reject(new Error('No editable packaged text files found in this APK.'));
     }
 
+    if (isCancelRequested()) {
+        return Promise.reject(cancellationError());
+    }
+
     // === NEW: Detect server signals from actual file contents ===
     var serverSignals = detectServerSignals(keyFiles);
     var hasServerSignals = serverSignals.length > 0;
@@ -958,6 +981,9 @@ export function runAutonomousWorkflow(zip, allFiles, categories, manifest, keyFi
 
     return runRecon(modelId, reconPrompt, onProgress)
         .then(function(reconMods) {
+            if (isCancelRequested()) {
+                throw cancellationError();
+            }
             // Filter recon results to only target files present in keyFiles
             var filtered = [];
             for (var ri = 0; ri < reconMods.length; ri++) {
@@ -1012,6 +1038,9 @@ export function runAutonomousWorkflow(zip, allFiles, categories, manifest, keyFi
             return runAllSpecialistBatches(modelId, filtered, keyFiles, onProgress, serverSignals);
         })
         .then(function(allMods) {
+            if (isCancelRequested()) {
+                throw cancellationError();
+            }
             // Phase 3 — Validation Agent merges & validates locally
             safeProgress(onProgress, {
                 phase: 'validation', attempt: 2 + MAX_BATCHES, maxAttempts: 2 + MAX_BATCHES,
@@ -1140,6 +1169,9 @@ export function runAutonomousWorkflow(zip, allFiles, categories, manifest, keyFi
             return validated;
         })
         ['catch'](function(err) {
+            if (err && err.cancelled) {
+                return Promise.reject(err);
+            }
             console.error('Squad pipeline failed:', err);
             safeProgress(onProgress, {
                 phase: 'fallback', attempt: 2 + MAX_BATCHES, maxAttempts: 2 + MAX_BATCHES,
