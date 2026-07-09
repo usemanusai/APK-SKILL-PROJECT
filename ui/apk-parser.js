@@ -6,6 +6,22 @@ var STRING_POOL_TYPE = 0x001C0001;
 var MAX_TEXT_SCAN_BYTES = 32768;
 var MAX_EDITABLE_FILE_SIZE = 1024 * 1024;
 
+// AXML node/chunk types used by parseAXMLTree, per AOSP ResourceTypes.h.
+// These are the low-16-bit "type" field of each chunk's ResChunk_header,
+// as read via DataView#getUint16 - NOT the commonly-quoted combined
+// type+headerSize 32-bit magic (e.g. 0x00100102 for START_ELEMENT is
+// headerSize=0x0010 packed with type=0x0102; we only compare the type half).
+var RES_XML_RESOURCE_MAP_TYPE = 0x0180;
+var RES_XML_START_NAMESPACE_TYPE = 0x0100;
+var RES_XML_END_NAMESPACE_TYPE = 0x0101;
+var RES_XML_START_ELEMENT_TYPE = 0x0102;
+var RES_XML_END_ELEMENT_TYPE = 0x0103;
+var RES_XML_CDATA_TYPE = 0x0104;
+var TYPE_INT_BOOLEAN = 0x12;
+var TYPE_INT_DEC = 0x10;
+var TYPE_INT_HEX = 0x11;
+var NO_STRING_REF = 0xFFFFFFFF;
+
 var _safeExts = ['.json', '.txt', '.cfg', '.conf', '.ini', '.properties', '.prop', '.xml',
   '.html', '.htm', '.js', '.mjs', '.cjs', '.css', '.csv', '.tsv', '.md',
   '.yaml', '.yml', '.toml', '.sql', '.graphql', '.gql', '.smali', '.kt', '.java'];
@@ -84,6 +100,161 @@ export function parseAXMLStrings(buffer) {
     console.warn('AXML parse error:', error);
     return null;
   }
+}
+
+function resolveAXMLString(strings, ref) {
+  if (ref === undefined || ref === null || ref === NO_STRING_REF) return null;
+  var s = strings[ref];
+  return s === undefined ? null : s;
+}
+
+function resolveAXMLAttrValue(strings, rawValueRef, dataType, data) {
+  var s = resolveAXMLString(strings, rawValueRef);
+  if (s !== null) return s;
+  if (dataType === TYPE_INT_BOOLEAN) return data !== 0;
+  if (dataType === TYPE_INT_DEC || dataType === TYPE_INT_HEX) return String(data);
+  return null;
+}
+
+// Lightweight streaming walk of the AXML node-chunk stream (after the string
+// pool, which parseAXMLStrings already extracts). Rather than building a full
+// generic DOM, this tracks only the handful of elements/attributes needed to
+// answer the manifest risk questions: <application>, <uses-sdk>, and the
+// exported/intent-filter shape of <activity>/<service>/<receiver>/<provider>.
+// Returns null (never throws) if the buffer is malformed/truncated so callers
+// can fall back to the previous "not determined" behavior.
+export function parseAXMLTree(buffer, strings) {
+  try {
+    if (!strings || !buffer) return null;
+    var view = new DataView(buffer);
+    var byteLength = buffer.byteLength;
+    if (byteLength < 8) return null;
+
+    var stringPoolChunkSize = view.getUint32(12, true);
+    var pos = 8 + stringPoolChunkSize;
+    if (pos <= 0 || pos + 8 > byteLength) return null;
+
+    // Optional XML resource map chunk immediately follows the string pool.
+    var peekType = view.getUint16(pos, true);
+    if (peekType === RES_XML_RESOURCE_MAP_TYPE) {
+      var mapSize = view.getUint32(pos + 4, true);
+      if (mapSize <= 0) return null;
+      pos += mapSize;
+    }
+
+    var applicationAttrs = null;
+    var usesSdkAttrs = null;
+    var exportedComponentCount = 0;
+    var stack = [];
+    var iterations = 0;
+
+    while (pos + 8 <= byteLength && iterations < 200000) {
+      iterations++;
+      var chunkType = view.getUint16(pos, true);
+      var chunkSize = view.getUint32(pos + 4, true);
+      if (chunkSize <= 0 || pos + chunkSize > byteLength) break;
+
+      if (chunkType === RES_XML_START_ELEMENT_TYPE) {
+        var bodyStart = pos + 16;
+        if (bodyStart + 16 > byteLength) break;
+        var nameRef = view.getUint32(bodyStart + 4, true);
+        var attributeStart = view.getUint16(bodyStart + 8, true);
+        var attributeCount = view.getUint16(bodyStart + 12, true);
+        var elemName = resolveAXMLString(strings, nameRef);
+        var attrsBase = bodyStart + attributeStart;
+        var attrs = {};
+
+        for (var ai = 0; ai < attributeCount; ai++) {
+          var attrOff = attrsBase + ai * 20;
+          if (attrOff + 20 > byteLength) break;
+          var attrNameRef = view.getUint32(attrOff + 4, true);
+          var attrRawValueRef = view.getUint32(attrOff + 8, true);
+          var attrDataType = view.getUint8(attrOff + 15);
+          var attrData = view.getUint32(attrOff + 16, true);
+          var attrName = resolveAXMLString(strings, attrNameRef);
+          if (attrName) {
+            attrs[attrName] = resolveAXMLAttrValue(strings, attrRawValueRef, attrDataType, attrData);
+          }
+        }
+
+        if (elemName === 'application' && !applicationAttrs) applicationAttrs = attrs;
+        if (elemName === 'uses-sdk' && !usesSdkAttrs) usesSdkAttrs = attrs;
+        if (elemName === 'intent-filter' && stack.length) stack[stack.length - 1].hasIntentFilter = true;
+
+        stack.push({
+          name: elemName,
+          hasExportedAttr: Object.prototype.hasOwnProperty.call(attrs, 'exported'),
+          exportedValue: attrs.exported,
+          hasIntentFilter: false,
+        });
+      } else if (chunkType === RES_XML_END_ELEMENT_TYPE) {
+        var popped = stack.pop();
+        if (popped && (popped.name === 'activity' || popped.name === 'service' || popped.name === 'receiver' || popped.name === 'provider')) {
+          var isExported;
+          if (popped.hasExportedAttr) {
+            isExported = popped.exportedValue === true || String(popped.exportedValue).toLowerCase() === 'true';
+          } else {
+            isExported = popped.hasIntentFilter;
+          }
+          if (isExported) exportedComponentCount++;
+        }
+      }
+      // START_NAMESPACE / END_NAMESPACE / CDATA chunks carry no data we need;
+      // just skip over them via the generic chunkSize advance below.
+      pos += chunkSize;
+    }
+
+    return {
+      applicationAttrs: applicationAttrs,
+      usesSdkAttrs: usesSdkAttrs,
+      exportedComponentCount: exportedComponentCount,
+    };
+  } catch (error) {
+    console.warn('AXML tree parse error:', error);
+    return null;
+  }
+}
+
+function toBoolAttr(value, defaultValue) {
+  if (value === undefined) return defaultValue;
+  if (typeof value === 'boolean') return value;
+  return String(value).toLowerCase() === 'true';
+}
+
+// Derives the same risk-relevant fields parseTextManifest produces, but from
+// a real binary AXML tree walk instead of a flat string-pool scan. Falls
+// back to null per-field (not the whole result) only when the underlying
+// element genuinely could not be located.
+function deriveManifestFlagsFromTree(tree) {
+  var appAttrs = tree && tree.applicationAttrs;
+  var sdkAttrs = tree && tree.usesSdkAttrs;
+
+  var debuggable = appAttrs ? toBoolAttr(appAttrs.debuggable, false) : null;
+  var allowBackup = appAttrs ? toBoolAttr(appAttrs.allowBackup, true) : null;
+
+  var targetSdkVersion = sdkAttrs && sdkAttrs.targetSdkVersion !== undefined ? String(sdkAttrs.targetSdkVersion) : null;
+  var minSdkVersion = sdkAttrs && sdkAttrs.minSdkVersion !== undefined ? String(sdkAttrs.minSdkVersion) : null;
+
+  var usesCleartextTraffic = null;
+  if (appAttrs) {
+    if (appAttrs.usesCleartextTraffic !== undefined) {
+      usesCleartextTraffic = toBoolAttr(appAttrs.usesCleartextTraffic, true);
+    } else if (Object.prototype.hasOwnProperty.call(appAttrs, 'networkSecurityConfig')) {
+      usesCleartextTraffic = false;
+    } else {
+      var targetSdkNum = targetSdkVersion !== null ? parseInt(targetSdkVersion, 10) : NaN;
+      usesCleartextTraffic = isNaN(targetSdkNum) ? true : targetSdkNum < 28;
+    }
+  }
+
+  return {
+    debuggable: debuggable,
+    allowBackup: allowBackup,
+    usesCleartextTraffic: usesCleartextTraffic,
+    targetSdkVersion: targetSdkVersion,
+    minSdkVersion: minSdkVersion,
+    exportedComponentCount: tree ? tree.exportedComponentCount : null,
+  };
 }
 
 export function categorizeFile(path) {
@@ -428,6 +599,12 @@ export function analyzeManifest(zip) {
       if (/^\d+\.\d/.test(strings[v]) && strings[v].length < 20) { versionName = strings[v]; break; }
     }
 
+    // Attempt real binary attribute parsing to answer the risk-relevant
+    // questions; on any failure (malformed/truncated buffer) this yields
+    // null and every field below falls back to "not determined".
+    var tree = parseAXMLTree(buffer, strings);
+    var flags = deriveManifestFlagsFromTree(tree);
+
     return {
       'package': pkg,
       versionName: versionName,
@@ -437,14 +614,12 @@ export function analyzeManifest(zip) {
       receivers: (function() { var r = []; for (var _rv = 0; _rv < strings.length; _rv++) { if (/Receiver$/.test(strings[_rv]) && strings[_rv].indexOf('.') >= 0) r.push(strings[_rv]); } return r; })(),
       providers: (function() { var r = []; for (var _pr = 0; _pr < strings.length; _pr++) { if (/Provider$/.test(strings[_pr]) && strings[_pr].indexOf('.') >= 0) r.push(strings[_pr]); } return r; })(),
       strings: strings,
-      // These flags cannot be reliably derived from a flat AXML string pool
-      // without full binary attribute parsing, so we explicitly mark them
-      // "not determined" rather than guessing.
-      debuggable: null,
-      allowBackup: null,
-      usesCleartextTraffic: null,
-      targetSdkVersion: null,
-      minSdkVersion: null,
+      debuggable: flags.debuggable,
+      allowBackup: flags.allowBackup,
+      usesCleartextTraffic: flags.usesCleartextTraffic,
+      targetSdkVersion: flags.targetSdkVersion,
+      minSdkVersion: flags.minSdkVersion,
+      exportedComponentCount: flags.exportedComponentCount,
     };
   });
 }
@@ -569,6 +744,15 @@ export function assessManifestRisk(manifest) {
       severity: hasHigh ? 'high' : 'medium',
       label: 'Requests ' + foundDangerous.length + ' sensitive permission(s)',
       detail: foundDangerous.join(', '),
+    });
+  }
+
+  if (typeof manifest.exportedComponentCount === 'number' && manifest.exportedComponentCount > 3) {
+    findings.push({
+      id: 'exported-components',
+      severity: 'medium',
+      label: manifest.exportedComponentCount + ' exported component(s)',
+      detail: 'Activities/services/receivers/providers with android:exported="true" (or implicitly exported via an <intent-filter> with no explicit exported="false") are reachable by other apps, widening the attack surface.',
     });
   }
 
