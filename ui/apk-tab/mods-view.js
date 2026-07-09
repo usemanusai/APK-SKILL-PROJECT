@@ -17,6 +17,37 @@ function toggleModExpanded(modId) {
   setState({ apkExpandedMods: Array.from(expanded) });
 }
 
+// A mod counts as "verified" when the diff-verification pass confirmed its
+// content against the real source file (fallback/pattern mods are always
+// deterministic and pre-marked verified: true).
+function isModVerified(mod) {
+  return mod.verified === true;
+}
+
+function getConfidenceBadge(mod) {
+  if (typeof mod.confidence !== 'number') return null;
+  var pct = mod.confidence;
+  var cls, label;
+  if (mod.verified === true) {
+    cls = 'bg-emerald-400/10 text-emerald-300 border border-emerald-400/20';
+    label = '\u2713 Verified ' + pct + '%';
+  } else if (mod.verified === null) {
+    cls = 'bg-slate-400/10 text-slate-400 border border-slate-400/20';
+    label = 'Unverified';
+  } else if (pct >= 45) {
+    cls = 'bg-amber-400/10 text-amber-300 border border-amber-400/20';
+    label = 'Low confidence ' + pct + '%';
+  } else {
+    cls = 'bg-rose-400/10 text-rose-300 border border-rose-400/20';
+    label = '\u26A0 Likely hallucinated ' + pct + '%';
+  }
+  var notes = (mod.verificationNotes || []).join(' ');
+  return el('span', {
+    className: 'text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider ' + cls,
+    title: notes || 'Diff-verification confidence score',
+  }, label);
+}
+
 export function renderApkMods(container, onToggleCategory, onExport) {
   var s = getState();
   var validation = validateModsAgainstAPK(s.apkMods, s.apkFile.allFiles, s.apkFile.editablePaths || []);
@@ -41,6 +72,14 @@ export function renderApkMods(container, onToggleCategory, onExport) {
       onClick: function() { setState({ apkAppliedMods: validation.safeMods.map(function(mod) { return mod.id; }) }); },
       disabled: validation.safeMods.length === 0,
     }, t('app.apk.selectSafe')),
+    el('button', {
+      className: 'text-[10px] px-2.5 py-1 rounded-lg bg-white/5 text-emerald-300 border border-emerald-400/20 hover:bg-emerald-400/10 hover:border-emerald-400/40 transition-colors font-semibold',
+      onClick: function() {
+        setState({ apkAppliedMods: validation.safeMods.filter(isModVerified).map(function(mod) { return mod.id; }) });
+      },
+      disabled: validation.safeMods.filter(isModVerified).length === 0,
+      title: 'Select only mods whose diff was confirmed to match the real source file',
+    }, '\u2713 Select Verified'),
     el('button', {
       className: 'text-[10px] px-2.5 py-1 rounded-lg bg-white/5 text-slate-400 border border-white/10 hover:border-white/20 hover:text-white transition-colors font-semibold',
       onClick: function() { setState({ apkAppliedMods: [] }); },
@@ -404,6 +443,10 @@ function renderCategoryGrid(container, mods, safeIds, unsafeMap, applied) {
         }, mod.targetFile));
       }
 
+      // Diff-verification confidence (anti-hallucination signal)
+      var confidenceBadge = getConfidenceBadge(mod);
+      if (confidenceBadge) badgeRow.appendChild(confidenceBadge);
+
       // Install-safe / blocked
       badgeRow.appendChild(isSupported
         ? el('span', { className: 'text-[9px] px-1.5 py-0.5 rounded bg-emerald-400/10 text-emerald-300 border border-emerald-400/20' }, t('app.apk.installSafeLabel'))
@@ -438,6 +481,19 @@ function renderCategoryGrid(container, mods, safeIds, unsafeMap, applied) {
           expandedSection.appendChild(el('div', { className: 'rounded-lg bg-white/[0.03] border border-white/5 p-3' },
             el('div', { className: 'text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1.5' }, '&#128203; Instructions'),
             el('pre', { className: 'text-xs text-slate-300 whitespace-pre-wrap leading-relaxed font-mono' }, mod.instructions),
+          ));
+        }
+
+        if (typeof mod.confidence === 'number' && mod.verificationNotes && mod.verificationNotes.length > 0) {
+          var verifCls = mod.verified === true
+            ? 'rounded-lg bg-emerald-500/5 border border-emerald-500/20 p-3'
+            : mod.verified === null
+              ? 'rounded-lg bg-slate-500/5 border border-slate-500/20 p-3'
+              : 'rounded-lg bg-amber-500/5 border border-amber-500/20 p-3';
+          var verifTitleCls = mod.verified === true ? 'text-emerald-400' : mod.verified === null ? 'text-slate-400' : 'text-amber-400';
+          expandedSection.appendChild(el('div', { className: verifCls },
+            el('div', { className: 'text-[10px] font-bold uppercase tracking-widest ' + verifTitleCls + ' mb-1.5' }, '&#128269; Diff Verification (' + mod.confidence + '%)'),
+            el('p', { className: 'text-xs text-slate-300 leading-relaxed' }, mod.verificationNotes.join(' ')),
           ));
         }
 
@@ -830,6 +886,9 @@ function exportAsMarkdown(mods, apkFile, manifest) {
     md.push('| **Difficulty** | `' + (mod.difficulty || 'medium') + '` |');
     md.push('| **Target File** | `' + (mod.targetFile || 'N/A') + '` |');
     if (mod.lineRange) md.push('| **Line Range** | `' + mod.lineRange + '` |');
+    if (typeof mod.confidence === 'number') {
+      md.push('| **Diff Verification** | ' + (mod.verified === true ? '\u2713 Verified' : mod.verified === null ? 'Unverified (no source to compare)' : '\u26A0 Low confidence') + ' \u2014 ' + mod.confidence + '% |');
+    }
     md.push('');
     if (mod.description) {
       md.push('> ' + mod.description);

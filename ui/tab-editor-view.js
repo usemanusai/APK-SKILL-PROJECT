@@ -365,6 +365,21 @@ function renderAiModsGrid(container, s) {
       topRow.appendChild(el('span', { className: 'text-sm font-semibold text-white flex-1 leading-tight' }, mod.label));
       card.appendChild(topRow);
 
+      if (typeof mod.confidence === 'number') {
+        var confCls = mod.verified === true
+          ? 'bg-emerald-400/10 text-emerald-300 border border-emerald-400/20'
+          : mod.verified === null
+            ? 'bg-slate-400/10 text-slate-400 border border-slate-400/20'
+            : 'bg-amber-400/10 text-amber-300 border border-amber-400/20';
+        var confLabel = mod.verified === true ? ('\u2713 Verified ' + mod.confidence + '%')
+          : mod.verified === null ? 'Unverified'
+          : ('\u26A0 Low confidence ' + mod.confidence + '%');
+        card.appendChild(el('span', {
+          className: 'ml-7 mt-1 inline-block text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider ' + confCls,
+          title: (mod.verificationNotes || []).join(' ') || 'Diff-verification confidence score',
+        }, confLabel));
+      }
+
       card.appendChild(el('p', { className: 'text-xs text-slate-400 mt-1 ml-7 leading-relaxed' }, mod.description));
 
       if (!isApplied) {
