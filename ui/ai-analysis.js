@@ -365,9 +365,11 @@ function parseUnifiedDiffHunks(diffText) {
 
     // Skip standard unified-diff metadata lines (git-style headers) so they
     // aren't mistaken for implicit-hunk content — they start with -/+ but are
-    // not real removed/added file lines.
-    if (line.indexOf('--- ') === 0 || line.indexOf('+++ ') === 0 ||
-        line.indexOf('diff --git ') === 0 || line.indexOf('index ') === 0) {
+    // not real removed/added file lines. Only applies before any hunk has
+    // started — once inside a real hunk, every -/+/space-prefixed line is
+    // genuine diff payload and must never be discarded.
+    if (!current && (line.indexOf('--- ') === 0 || line.indexOf('+++ ') === 0 ||
+        line.indexOf('diff --git ') === 0 || line.indexOf('index ') === 0)) {
       continue;
     }
 
