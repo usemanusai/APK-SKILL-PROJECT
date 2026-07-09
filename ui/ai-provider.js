@@ -151,9 +151,16 @@ function normalizeOpenRouterModel(m) {
 
 // ---------- Chat completions ----------
 
+function coerceNonNegativeNumber(value, fallback) {
+  if (value == null) return fallback;
+  var num = Number(value);
+  if (isNaN(num) || num < 0) return fallback;
+  return num;
+}
+
 export function callModel(params) {
-  var maxRetries = (params && params.maxRetries != null) ? params.maxRetries : DEFAULT_MAX_RETRIES;
-  var retryBaseDelayMs = (params && params.retryBaseDelayMs != null) ? params.retryBaseDelayMs : DEFAULT_RETRY_BASE_DELAY_MS;
+  var maxRetries = coerceNonNegativeNumber(params && params.maxRetries, DEFAULT_MAX_RETRIES);
+  var retryBaseDelayMs = coerceNonNegativeNumber(params && params.retryBaseDelayMs, DEFAULT_RETRY_BASE_DELAY_MS);
 
   if (isOpenRouterActive()) {
     return callOpenRouter(params, maxRetries, retryBaseDelayMs);
