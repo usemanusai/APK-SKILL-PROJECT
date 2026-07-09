@@ -15,6 +15,7 @@
 //   Merge & validate against editablePaths. Deduplicate. Supplement if too few.
 
 import { SYSTEM_PROMPT_PRIMARY, MOD_SIDE_CLASSIFICATION_RULES } from './ai-analysis.js';
+import { callModel as providerCallModel, extractText as providerExtractText } from './ai-provider.js';
 
 var t = function(key, vals) {
     var i18n = window.miniappI18n;
@@ -486,7 +487,7 @@ function runRecon(modelId, userPrompt, onProgress) {
         message: 'Phase 1/3 — Recon agent scanning APK structure + file contents for mod opportunities (including server signals)...',
     });
 
-    return window.miniappsAI.callModel({
+    return providerCallModel({
         modelId: modelId,
         messages: [
             { role: 'system', content: RECON_SYSTEM_PROMPT },
@@ -495,7 +496,7 @@ function runRecon(modelId, userPrompt, onProgress) {
         timeoutMs: RECON_TIMEOUT_MS,
     }).then(function(result) {
         var raw = '';
-        try { raw = window.miniappsAI.extractText(result); } catch (_) {}
+        try { raw = providerExtractText(result); } catch (_) {}
         if (!raw || raw.trim().length === 0) {
             throw new Error('Recon agent returned empty response');
         }
@@ -620,7 +621,7 @@ function runSpecialistBatch(modelId, batch, keyFiles, onProgress, batchIndex, to
     var userPrompt = buildSpecialistUserPrompt(batch, keyFiles, serverSignals);
     var systemPrompt = SYSTEM_PROMPT_PRIMARY + SPECIALIST_SUFFIX;
 
-    return window.miniappsAI.callModel({
+    return providerCallModel({
         modelId: modelId,
         messages: [
             { role: 'system', content: systemPrompt },
@@ -629,7 +630,7 @@ function runSpecialistBatch(modelId, batch, keyFiles, onProgress, batchIndex, to
         timeoutMs: SPECIALIST_TIMEOUT_MS,
     }).then(function(result) {
         var raw = '';
-        try { raw = window.miniappsAI.extractText(result); } catch (_) {}
+        try { raw = providerExtractText(result); } catch (_) {}
         if (!raw || raw.trim().length === 0) {
             throw new Error('Specialist returned empty');
         }

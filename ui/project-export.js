@@ -41,6 +41,9 @@ const ALL_PROJECT_PATHS = [
   'locales/en.json',
   // Frontend UI
   'ui/ai-analysis.js',
+  'ui/ai-provider.js',
+  'ui/ai-settings-storage.js',
+  'ui/settings-view.js',
   'ui/apk-parser.js',
   'ui/apk-signer.js',
   'ui/apk-tab/actions.js',

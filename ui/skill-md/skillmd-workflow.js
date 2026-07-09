@@ -16,6 +16,7 @@
 // Can take a very long time for large APK + many mods because every step must be phone-precise.
 
 import { SYSTEM_PROMPT_PRIMARY } from '../ai-analysis.js';
+import { callModel as providerCallModel, extractText as providerExtractText } from '../ai-provider.js';
 
 var t = function(key, vals) {
   var i18n = window.miniappI18n;
@@ -170,7 +171,7 @@ Return ONLY the complete markdown document.`;
 
 // ── Helper to call model ──
 function callModel(modelId, system, user, timeout) {
-  return window.miniappsAI.callModel({
+  return providerCallModel({
     modelId: modelId,
     messages: [
       { role: 'system', content: system },
@@ -178,7 +179,7 @@ function callModel(modelId, system, user, timeout) {
     ],
     timeoutMs: timeout
   }).then(result => {
-    return window.miniappsAI.extractText(result) || '';
+    return providerExtractText(result) || '';
   });
 }
 

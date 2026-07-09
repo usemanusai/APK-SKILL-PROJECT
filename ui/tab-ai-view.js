@@ -1,6 +1,7 @@
 // ui/tab-ai-view.js - AI Assistant chat tab with ALL models + search
 import { getState, setState } from '../state.js';
 import { el, t } from './dom.js';
+import { callModel as providerCallModel, extractText as providerExtractText, getActiveProvider } from './ai-provider.js';
 
 var DEFAULT_MODEL = '2a90c2e2-e87d-4f6a-be9a-108c25c6ad64'; // DeepSeek V3.2
 
@@ -104,10 +105,12 @@ export function renderAiTab(container) {
   for (var cm = 0; cm < s.availableModels.length; cm++) {
     if (s.availableModels[cm].id === s.selectedModelId) { currentModel = s.availableModels[cm]; break; }
   }
-  var summaryEl = el('div', { className: 'flex items-center gap-2 mt-1' },
+  var providerIsOpenRouter = getActiveProvider() === 'openrouter';
+  var summaryEl = el('div', { className: 'flex items-center gap-2 mt-1 flex-wrap' },
     el('span', { className: 'text-xs text-slate-500' }, 'Using:'),
     el('span', { className: 'text-xs font-semibold text-cyan-300' }, currentModel ? currentModel.title : 'DeepSeek V3.2'),
     el('span', { className: 'text-xs text-slate-600' }, '(' + ((currentModel && currentModel.estimatedCostPerRun) || 5) + ' credits/run)'),
+    providerIsOpenRouter ? el('span', { className: 'text-[10px] px-1.5 py-0.5 rounded-md bg-violet-400/15 text-violet-300 font-bold border border-violet-400/30' }, 'OPENROUTER') : null,
   );
 
   selectorWrap.appendChild(label);
@@ -246,12 +249,12 @@ function sendChat(text, container) {
 
   function attempt(attemptNum) {
     var timeoutMs = attemptNum === 1 ? 120000 : 180000;
-    return window.miniappsAI.callModel({
+    return providerCallModel({
       modelId: modelId,
       messages: apiMessages,
       timeoutMs: timeoutMs,
     }).then(function(result) {
-      var reply = window.miniappsAI.extractText(result) || '';
+      var reply = providerExtractText(result) || '';
       if (reply.trim().length > 0) return reply;
       throw new Error('Empty response');
     }).catch(function(err) {

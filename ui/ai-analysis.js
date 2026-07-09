@@ -1,5 +1,6 @@
 // ui/ai-analysis.js - AI-powered mod analysis engine v3
 // 120+ real, actionable modifications across 28 categories
+import { callModel as providerCallModel, extractText as providerExtractText } from './ai-provider.js';
 
 var MAX_RETRIES = 3;
 var BASE_TIMEOUT_MS = 180000;
@@ -294,7 +295,7 @@ export function analyzeAndSuggestMods(fileContent, fileType, modelId, onProgress
 
     var systemPrompt = isRetry ? SYSTEM_PROMPT_RETRY : SYSTEM_PROMPT_PRIMARY;
 
-    return window.miniappsAI.callModel({
+    return providerCallModel({
       modelId: modelId,
       messages: [
         { role: 'system', content: systemPrompt },
@@ -302,7 +303,7 @@ export function analyzeAndSuggestMods(fileContent, fileType, modelId, onProgress
       ],
       timeoutMs: timeout,
     }).then(function(result) {
-      var raw = window.miniappsAI.extractText(result);
+      var raw = providerExtractText(result);
       if (!raw || raw.trim().length === 0) throw new Error('AI returned empty response');
 
       var mods = parseModsRobust(raw, fileContent);

@@ -1,6 +1,7 @@
 // ui/apk-tab/chat-controller.js - APK Chat engine v3: 120+ mod types, context-aware AI
 import { getState, setState } from '../../state.js';
 import { t } from '../dom.js';
+import { callModel as providerCallModel, extractText as providerExtractText } from '../ai-provider.js';
 
 var MAX_RETRIES = 2;
 var CHAT_TIMEOUT = 120000;
@@ -463,12 +464,12 @@ export function sendApkChatMessage(text, renderFn) {
 
     var timeout = CHAT_TIMEOUT + (attempt - 1) * 60000;
 
-    return window.miniappsAI.callModel({
+    return providerCallModel({
       modelId: modelId,
       messages: apiMessages,
       timeoutMs: timeout,
     }).then(function(result) {
-      var reply = window.miniappsAI.extractText(result) || '';
+      var reply = providerExtractText(result) || '';
       if (reply.trim().length > 0) {
         return finishWithReply(messages, text, reply, renderFn);
       }
