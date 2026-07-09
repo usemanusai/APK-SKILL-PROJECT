@@ -335,6 +335,178 @@ export function analyzeAndSuggestMods(fileContent, fileType, modelId, onProgress
   }
 }
 
+// ── Diff verification (anti-hallucination) ──
+// Parses a GitHub-style unified diff and checks whether the lines it claims to
+// remove/keep (the "old" side) actually exist in the real original file content.
+// This is the only defense against an LLM inventing a plausible-looking but
+// non-existent smali/XML edit — the prompt FORBIDS impossible mods, but nothing
+// previously enforced it.
+
+function normalizeVerifyLine(line) {
+  return String(line == null ? '' : line).replace(/\s+/g, ' ').trim();
+}
+
+// Parses unified diff text into hunks of { oldStart, oldLines: [{text, removed}], addedLines: [] }.
+// Tolerates missing/garbled "@@" headers (some models omit or fake them) by
+// falling back to an implicit hunk starting at line 1.
+function parseUnifiedDiffHunks(diffText) {
+  var lines = String(diffText || '').split('\n');
+  var hunks = [];
+  var current = null;
+
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    var headerMatch = line.match(/^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@/);
+    if (headerMatch) {
+      current = { oldStart: parseInt(headerMatch[1], 10), oldLines: [], addedLines: [], implicit: false };
+      hunks.push(current);
+      continue;
+    }
+
+    var prefix = line.charAt(0);
+    if (!current) {
+      if (prefix === '+' || prefix === '-' || prefix === ' ') {
+        current = { oldStart: 1, oldLines: [], addedLines: [], implicit: true };
+        hunks.push(current);
+      } else {
+        continue;
+      }
+    }
+
+    if (prefix === '-') {
+      current.oldLines.push({ text: line.slice(1), removed: true });
+    } else if (prefix === ' ') {
+      current.oldLines.push({ text: line.slice(1), removed: false });
+    } else if (prefix === '+') {
+      current.addedLines.push(line.slice(1));
+    } else if (line.indexOf('@@') === -1 && line.trim().length > 0 && current.implicit) {
+      // Stray unprefixed line inside a header-less hunk — treat as context.
+      current.oldLines.push({ text: line, removed: false });
+    }
+  }
+  return hunks;
+}
+
+// Finds the best-effort alignment of a hunk's "old side" lines within the real
+// file, allowing a small amount of line drift to tolerate minor reformatting.
+function findBestDiffAlignment(oldLinesNormalized, originalLinesNormalized, hint) {
+  var total = oldLinesNormalized.length;
+  if (total === 0) return { matched: 0, total: 0 };
+
+  var n = originalLinesNormalized.length;
+  var candidates = [];
+
+  if (typeof hint === 'number' && hint >= 0) {
+    var lo = Math.max(0, hint - 25);
+    var hi = Math.min(n, hint + 25);
+    for (var k = lo; k < hi; k++) candidates.push(k);
+  }
+
+  var firstMeaningful = null;
+  for (var fi = 0; fi < oldLinesNormalized.length; fi++) {
+    if (oldLinesNormalized[fi].length > 0) { firstMeaningful = oldLinesNormalized[fi]; break; }
+  }
+  if (firstMeaningful && n <= 20000) {
+    for (var oi = 0; oi < n; oi++) {
+      if (originalLinesNormalized[oi] === firstMeaningful) candidates.push(oi);
+    }
+  }
+  if (candidates.length === 0) {
+    var cap = Math.min(n, 20000);
+    for (var allI = 0; allI < cap; allI++) candidates.push(allI);
+  }
+
+  var seen = {};
+  var uniq = [];
+  for (var ci = 0; ci < candidates.length; ci++) {
+    if (!seen[candidates[ci]]) { seen[candidates[ci]] = true; uniq.push(candidates[ci]); }
+  }
+
+  var bestMatched = 0;
+  for (var u = 0; u < uniq.length; u++) {
+    var pos = uniq[u];
+    var matched = 0;
+    for (var li = 0; li < oldLinesNormalized.length; li++) {
+      var want = oldLinesNormalized[li];
+      if (want.length === 0) { matched++; continue; }
+      var found = false;
+      for (var drift = 0; drift <= 3 && (pos + drift) < n; drift++) {
+        if (originalLinesNormalized[pos + drift] === want) { pos += drift + 1; found = true; break; }
+      }
+      if (found) matched++;
+      else pos++;
+    }
+    if (matched > bestMatched) bestMatched = matched;
+    if (bestMatched === total) break;
+  }
+
+  return { matched: bestMatched, total: total };
+}
+
+// Verifies a mod's unified diff against the real original file content and
+// returns a confidence score + verified flag + human-readable notes.
+// originalContent must be the FULL (untruncated) source the mod targets.
+export function verifyModDiff(diff, originalContent, options) {
+  options = options || {};
+  var lineRange = options.lineRange;
+
+  if (!diff || typeof diff !== 'string' || diff.trim().length === 0) {
+    return { verified: false, confidence: 35, matchRatio: 0, notes: ['No diff provided — cannot verify this mod against the source file.'] };
+  }
+  if (typeof originalContent !== 'string' || originalContent.length === 0) {
+    return { verified: null, confidence: 50, matchRatio: null, notes: ['Original file content unavailable — verification skipped.'] };
+  }
+
+  var hunks = parseUnifiedDiffHunks(diff);
+  if (hunks.length === 0) {
+    return { verified: false, confidence: 30, matchRatio: 0, notes: ['Diff has no recognizable +/-/@@ lines — likely malformed or fabricated.'] };
+  }
+
+  var originalLines = originalContent.split('\n');
+  var originalNorm = new Array(originalLines.length);
+  for (var oi = 0; oi < originalLines.length; oi++) originalNorm[oi] = normalizeVerifyLine(originalLines[oi]);
+
+  var totalOld = 0;
+  var totalMatched = 0;
+  for (var hi = 0; hi < hunks.length; hi++) {
+    var hunk = hunks[hi];
+    var oldNorm = new Array(hunk.oldLines.length);
+    for (var li = 0; li < hunk.oldLines.length; li++) oldNorm[li] = normalizeVerifyLine(hunk.oldLines[li].text);
+    var hint = hunk.implicit ? null : (hunk.oldStart - 1);
+    var result = findBestDiffAlignment(oldNorm, originalNorm, hint);
+    totalOld += result.total;
+    totalMatched += result.matched;
+  }
+
+  var matchRatio = totalOld > 0 ? (totalMatched / totalOld) : 0;
+  var confidence = Math.round(30 + matchRatio * 60);
+  var notes = [];
+
+  if (lineRange) {
+    var rangeMatch = String(lineRange).match(/(\d+)/);
+    var firstHunkStart = hunks[0].implicit ? null : hunks[0].oldStart;
+    if (rangeMatch && firstHunkStart) {
+      var claimedLine = parseInt(rangeMatch[1], 10);
+      if (Math.abs(claimedLine - firstHunkStart) <= 5) {
+        confidence += 5;
+      } else {
+        confidence -= 5;
+        notes.push('Claimed lineRange (' + lineRange + ') does not match the diff hunk header start (line ' + firstHunkStart + ').');
+      }
+    }
+  }
+
+  confidence = Math.max(0, Math.min(100, confidence));
+  var verified = matchRatio >= 0.6 && confidence >= 65;
+
+  if (matchRatio >= 0.9) notes.unshift('Diff content strongly matches the original file (' + Math.round(matchRatio * 100) + '%).');
+  else if (matchRatio >= 0.6) notes.unshift('Diff content mostly matches the original file (' + Math.round(matchRatio * 100) + '%).');
+  else if (matchRatio > 0) notes.unshift('Diff content only partially matches the original file (' + Math.round(matchRatio * 100) + '%) — likely contains hallucinated or misplaced lines.');
+  else notes.unshift('Diff content does not match the original file at all — likely fully hallucinated.');
+
+  return { verified: verified, confidence: confidence, matchRatio: Math.round(matchRatio * 100) / 100, notes: notes };
+}
+
 // ── Robust JSON parsing ──
 function parseModsRobust(raw, originalContent) {
   if (!raw || raw.trim().length === 0) return [];
@@ -435,6 +607,10 @@ function validateMods(parsed, originalContent) {
     var category = VALID_CATS.indexOf(m.category) >= 0 ? m.category : 'features';
     var modSide = VALID_SIDES.indexOf(m.modSide) >= 0 ? m.modSide : 'client';
     var difficulty = VALID_DIFF.indexOf(m.difficulty) >= 0 ? m.difficulty : 'medium';
+    var diffStr = String(m.diff || '');
+    var lineRangeStr = String(m.lineRange || '');
+
+    var verification = verifyModDiff(diffStr, originalContent, { lineRange: lineRangeStr });
 
     mods.push({
       id: 'ai-mod-' + Date.now() + '-' + i,
@@ -444,12 +620,15 @@ function validateMods(parsed, originalContent) {
       modSide: modSide,
       difficulty: difficulty,
       targetFile: String(m.targetFile || ''),
-      lineRange: String(m.lineRange || ''),
-      diff: String(m.diff || ''),
+      lineRange: lineRangeStr,
+      diff: diffStr,
       instructions: String(m.instructions || ''),
       fridaScript: String(m.fridaScript || ''),
       modifiedContent: m.modifiedContent,
       isAiMod: true,
+      confidence: verification.confidence,
+      verified: verification.verified,
+      verificationNotes: verification.notes,
     });
   }
   return mods.filter(function(m) { return m.modifiedContent !== originalContent; });
