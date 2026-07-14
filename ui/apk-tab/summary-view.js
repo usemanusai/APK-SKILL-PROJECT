@@ -1,4 +1,5 @@
 import { el, t } from '../dom.js';
+import { assessManifestRisk } from '../apk-parser.js';
 
 var BREAKDOWN_STYLES = {
   cyan: 'text-[10px] px-2 py-1 rounded-full bg-cyan-400/10 text-cyan-300 border border-cyan-400/20 font-semibold',
@@ -45,6 +46,7 @@ export function renderApkSummary(container, apk, manifest, onReset, buildState) 
         el('p', { className: 'text-cyan-300 font-mono mt-0.5' }, String((apk.editablePaths || []).length)),
       ),
     ));
+    infoCard.appendChild(renderManifestRiskBadge(manifest));
   }
 
   var breakdown = el('div', { className: 'flex flex-wrap gap-1.5 mt-3' });
@@ -95,6 +97,49 @@ export function renderApkSummary(container, apk, manifest, onReset, buildState) 
   container.appendChild(infoCard);
   renderRebuildBoundaries(container, apk, manifest);
   renderBuildStatus(container, buildState);
+}
+
+var RISK_BADGE_STYLES = {
+  low: 'text-[10px] px-2 py-1 rounded-full bg-emerald-400/10 text-emerald-300 border border-emerald-400/20 font-semibold',
+  medium: 'text-[10px] px-2 py-1 rounded-full bg-amber-400/10 text-amber-300 border border-amber-400/20 font-semibold',
+  high: 'text-[10px] px-2 py-1 rounded-full bg-rose-400/10 text-rose-300 border border-rose-400/20 font-semibold',
+};
+
+function renderManifestRiskBadge(manifest) {
+  var risk = assessManifestRisk(manifest);
+  var wrap = el('div', { className: 'mt-2 rounded-lg bg-white/[0.03] px-3 py-2 text-xs' });
+  var expanded = false;
+  var findingsList = el('ul', { className: 'mt-2 space-y-1 hidden' });
+
+  for (var fi = 0; fi < risk.findings.length; fi++) {
+    (function(finding) {
+      findingsList.appendChild(el('li', { className: 'text-[11px] text-slate-400 leading-relaxed flex gap-2' },
+        el('span', { className: 'mt-0.5 text-slate-500' }, '\u2022'),
+        el('span', {}, finding.label + (finding.detail ? ' \u2014 ' + finding.detail : '')),
+      ));
+    })(risk.findings[fi]);
+  }
+
+  var toggleBtn = el('button', {
+    className: 'text-[10px] text-slate-500 hover:text-slate-300 transition-colors ml-2',
+    onClick: function() {
+      expanded = !expanded;
+      findingsList.classList.toggle('hidden', !expanded);
+      toggleBtn.textContent = expanded ? '\u25B2' : '\u25BC';
+    },
+  }, '\u25BC');
+
+  var header = el('div', { className: 'flex items-center justify-between' },
+    el('span', { className: 'text-slate-500' }, 'Manifest risk'),
+    el('div', { className: 'flex items-center' },
+      el('span', { className: RISK_BADGE_STYLES[risk.level] || RISK_BADGE_STYLES.low }, risk.level.toUpperCase() + ' \u00B7 ' + risk.findings.length),
+      risk.findings.length ? toggleBtn : null,
+    ),
+  );
+
+  wrap.appendChild(header);
+  if (risk.findings.length) wrap.appendChild(findingsList);
+  return wrap;
 }
 
 function metricCard(label, value, valueClass) {

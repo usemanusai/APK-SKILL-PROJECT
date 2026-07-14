@@ -437,6 +437,14 @@ export function analyzeManifest(zip) {
       receivers: (function() { var r = []; for (var _rv = 0; _rv < strings.length; _rv++) { if (/Receiver$/.test(strings[_rv]) && strings[_rv].indexOf('.') >= 0) r.push(strings[_rv]); } return r; })(),
       providers: (function() { var r = []; for (var _pr = 0; _pr < strings.length; _pr++) { if (/Provider$/.test(strings[_pr]) && strings[_pr].indexOf('.') >= 0) r.push(strings[_pr]); } return r; })(),
       strings: strings,
+      // These flags cannot be reliably derived from a flat AXML string pool
+      // without full binary attribute parsing, so we explicitly mark them
+      // "not determined" rather than guessing.
+      debuggable: null,
+      allowBackup: null,
+      usesCleartextTraffic: null,
+      targetSdkVersion: null,
+      minSdkVersion: null,
     };
   });
 }
@@ -455,6 +463,27 @@ function parseTextManifest(xml) {
     perms.push(pm[1]);
   }
 
+  var debuggableAttr = getAttr('application', 'android:debuggable');
+  var debuggable = debuggableAttr ? debuggableAttr.toLowerCase() === 'true' : false;
+
+  // android:allowBackup defaults to true per Android semantics when the
+  // attribute is absent from <application>, so an empty match means "true".
+  var allowBackupAttr = getAttr('application', 'android:allowBackup');
+  var allowBackup = allowBackupAttr ? allowBackupAttr.toLowerCase() === 'true' : true;
+
+  var cleartextAttr = getAttr('application', 'android:usesCleartextTraffic');
+  var hasNetworkSecurityConfig = /android:networkSecurityConfig\s*=\s*"[^"]*"/i.test(xml);
+  var usesCleartextTraffic = cleartextAttr
+    ? cleartextAttr.toLowerCase() === 'true'
+    : !hasNetworkSecurityConfig;
+
+  var usesSdkMatch = xml.match(/<uses-sdk\b[^>]*>/i);
+  var usesSdkTag = usesSdkMatch ? usesSdkMatch[0] : '';
+  var targetSdkMatch = usesSdkTag.match(/android:targetSdkVersion\s*=\s*"([^"]*)"/i);
+  var minSdkMatch = usesSdkTag.match(/android:minSdkVersion\s*=\s*"([^"]*)"/i);
+  var targetSdkVersion = targetSdkMatch ? targetSdkMatch[1] : null;
+  var minSdkVersion = minSdkMatch ? minSdkMatch[1] : null;
+
   return {
     'package': getAttr('manifest', 'package') || 'unknown',
     versionName: getAttr('manifest', 'android:versionName') || '',
@@ -464,7 +493,106 @@ function parseTextManifest(xml) {
     receivers: [],
     providers: [],
     strings: [],
+    debuggable: debuggable,
+    allowBackup: allowBackup,
+    usesCleartextTraffic: usesCleartextTraffic,
+    targetSdkVersion: targetSdkVersion,
+    minSdkVersion: minSdkVersion,
   };
+}
+
+var DANGEROUS_PERMISSIONS = [
+  'SEND_SMS', 'RECEIVE_SMS', 'READ_SMS', 'CALL_PHONE', 'PROCESS_OUTGOING_CALLS',
+  'READ_CONTACTS', 'READ_CALL_LOG', 'ACCESS_FINE_LOCATION', 'ACCESS_BACKGROUND_LOCATION',
+  'RECORD_AUDIO', 'CAMERA', 'READ_EXTERNAL_STORAGE', 'WRITE_EXTERNAL_STORAGE',
+  'SYSTEM_ALERT_WINDOW', 'REQUEST_INSTALL_PACKAGES', 'BIND_ACCESSIBILITY_SERVICE',
+  'BIND_DEVICE_ADMIN', 'QUERY_ALL_PACKAGES',
+];
+var DANGEROUS_PERMISSIONS_SET = {};
+for (var _dp = 0; _dp < DANGEROUS_PERMISSIONS.length; _dp++) DANGEROUS_PERMISSIONS_SET[DANGEROUS_PERMISSIONS[_dp]] = true;
+
+// Permissions that warrant a "high" (rather than "medium") severity finding
+// when present, since they enable particularly sensitive capabilities.
+var HIGH_SEVERITY_PERMISSIONS_SET = {
+  BIND_ACCESSIBILITY_SERVICE: true,
+  BIND_DEVICE_ADMIN: true,
+  SYSTEM_ALERT_WINDOW: true,
+  REQUEST_INSTALL_PACKAGES: true,
+};
+
+export function assessManifestRisk(manifest) {
+  var findings = [];
+  if (!manifest) {
+    return { level: 'low', findings: findings };
+  }
+
+  if (manifest.debuggable === true) {
+    findings.push({
+      id: 'debuggable',
+      severity: 'high',
+      label: 'App is debuggable',
+      detail: 'android:debuggable="true" allows attaching a debugger to the running app in production, exposing internals and enabling runtime tampering.',
+    });
+  }
+
+  if (manifest.usesCleartextTraffic === true) {
+    findings.push({
+      id: 'cleartext-traffic',
+      severity: 'medium',
+      label: 'Allows cleartext (unencrypted) network traffic',
+      detail: 'android:usesCleartextTraffic="true" (or no networkSecurityConfig) permits plain HTTP, which can be intercepted or tampered with.',
+    });
+  }
+
+  if (manifest.allowBackup === true || manifest.allowBackup === undefined) {
+    findings.push({
+      id: 'allow-backup',
+      severity: 'low',
+      label: 'Backup extraction (adb backup) allowed',
+      detail: 'android:allowBackup is true (or unset, which defaults to true), allowing app data to be extracted via "adb backup" on debuggable/rooted devices.',
+    });
+  }
+
+  var perms = manifest.permissions || [];
+  var foundDangerous = [];
+  for (var pi = 0; pi < perms.length; pi++) {
+    var short = String(perms[pi]).replace(/^.*\.permission\./, '');
+    if (DANGEROUS_PERMISSIONS_SET[short]) foundDangerous.push(short);
+  }
+  if (foundDangerous.length) {
+    var hasHigh = false;
+    for (var hi = 0; hi < foundDangerous.length; hi++) {
+      if (HIGH_SEVERITY_PERMISSIONS_SET[foundDangerous[hi]]) { hasHigh = true; break; }
+    }
+    findings.push({
+      id: 'dangerous-permissions',
+      severity: hasHigh ? 'high' : 'medium',
+      label: 'Requests ' + foundDangerous.length + ' sensitive permission(s)',
+      detail: foundDangerous.join(', '),
+    });
+  }
+
+  if (manifest.allowBackup === null || manifest.debuggable === null || manifest.usesCleartextTraffic === null) {
+    findings.push({
+      id: 'manifest-flags-undetermined',
+      severity: 'low',
+      label: 'Some manifest flags could not be determined',
+      detail: 'debuggable/allowBackup/usesCleartextTraffic were not derivable from this binary manifest.',
+    });
+  }
+
+  var highCount = 0;
+  var mediumCount = 0;
+  for (var fi = 0; fi < findings.length; fi++) {
+    if (findings[fi].severity === 'high') highCount++;
+    else if (findings[fi].severity === 'medium') mediumCount++;
+  }
+
+  var level = 'low';
+  if (highCount > 0 || mediumCount >= 3) level = 'high';
+  else if (mediumCount >= 1) level = 'medium';
+
+  return { level: level, findings: findings };
 }
 
 export function readKeyFiles(zip, categories, editablePaths) {
