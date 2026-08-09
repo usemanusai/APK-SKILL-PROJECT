@@ -44,10 +44,12 @@ var state = {
   apkAttempt: 0,
   apkMaxAttempts: 3,
   apkProgressMsg: '',
+  apkDiscoveredMods: [],
   apkBuildReport: null,
   apkBuildError: null,
   apkShowFileBrowser: false,
   apkExpandedMods: [],
+  apkCancelRequested: false,
   // Backend pipeline state
   pipelineBaseUrl: '',
   pipelineHealth: null,

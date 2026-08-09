@@ -157,6 +157,30 @@ function renderSquadProgress(container, state) {
   }
   progress.appendChild(phaseRow);
 
+  // Live-discovered mods feed — grows as recon/specialist batches complete
+  var discovered = state.apkDiscoveredMods || [];
+  if (discovered.length > 0) {
+    var feedWrap = el('div', {
+      className: 'w-full max-h-40 overflow-y-auto rounded-lg bg-white/[0.03] border border-white/10 px-2 py-2 mt-1 flex flex-col gap-1',
+    });
+    for (var di = 0; di < discovered.length; di++) {
+      var dmod = discovered[di];
+      var isNewest = di === discovered.length - 1;
+      var pill = el('div', {
+        className: 'flex items-center gap-1.5 px-2 py-1 rounded-md bg-cyan-400/5 border border-cyan-400/15 text-[10px] text-cyan-100 transition-all duration-300' +
+          (isNewest ? ' animate-pulse' : ''),
+      });
+      pill.appendChild(el('span', { className: 'text-emerald-400', html: '&#10003;' }));
+      pill.appendChild(el('span', { className: 'font-semibold truncate' }, dmod.label || 'Modification'));
+      if (dmod.category) {
+        pill.appendChild(el('span', { className: 'ml-auto shrink-0 px-1.5 py-0.5 rounded-full bg-violet-400/10 text-violet-300 border border-violet-400/20' }, dmod.category));
+      }
+      feedWrap.appendChild(pill);
+    }
+    progress.appendChild(feedWrap);
+    progress.appendChild(el('p', { className: 'text-[10px] text-slate-500' }, discovered.length + ' modification(s) discovered so far…'));
+  }
+
   // Step counter or duration hint
   if (state.apkAttempt && state.apkMaxAttempts) {
     progress.appendChild(el('div', { className: 'text-xs text-slate-500 mt-1' },
@@ -176,5 +200,17 @@ function renderSquadProgress(container, state) {
   ));
 
   progress.appendChild(el('p', { className: 'text-[10px] text-slate-600 mt-1 text-center' }, t('app.apk.progressAnalyzing')));
+
+  // Cancel button — stops the in-flight workflow at the next safe checkpoint
+  var cancelling = !!state.apkCancelRequested;
+  progress.appendChild(el('button', {
+    id: 'apk-cancel-btn',
+    className: 'mt-2 px-4 py-1.5 rounded-full border border-rose-400/30 bg-rose-400/10 text-rose-300 text-xs font-bold transition hover:bg-rose-400/20 hover:border-rose-400/50 disabled:opacity-50 disabled:cursor-not-allowed',
+    disabled: cancelling,
+    onClick: function() {
+      setState({ apkCancelRequested: true });
+    },
+  }, cancelling ? 'Cancelling…' : 'Cancel'));
+
   container.appendChild(progress);
 }

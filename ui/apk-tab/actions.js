@@ -80,10 +80,12 @@ export function runApkAnalysis() {
   setState({
     apkState: 'analyzing',
     apkError: null,
+    apkCancelRequested: false,
     // Keep existing mods visible during re-analysis — do NOT clear apkMods or apkAppliedMods
     apkAttempt: 0,
     apkMaxAttempts: 3,
     apkProgressMsg: t('app.apk.progressStarting'),
+    apkDiscoveredMods: [],
   });
 
   runAutonomousWorkflow(
@@ -94,11 +96,15 @@ export function runApkAnalysis() {
     s.apkKeyFiles,
     modelId,
     function(progress) {
-      setState({
+      var patch = {
         apkAttempt: progress.attempt,
         apkMaxAttempts: progress.maxAttempts,
         apkProgressMsg: progress.message,
-      });
+      };
+      if (progress.newMods && progress.newMods.length > 0) {
+        patch.apkDiscoveredMods = (getState().apkDiscoveredMods || []).concat(progress.newMods);
+      }
+      setState(patch);
       var progressEl = document.getElementById('apk-progress-text');
       if (progressEl) progressEl.textContent = progress.message;
     },
@@ -139,6 +145,18 @@ export function runApkAnalysis() {
     showToast(t('app.apk.generatedToast', { count: newCount }) +
       (existingMods.length > 0 ? ' (' + merged.length + ' total)' : ''));
   })['catch'](function(error) {
+    if (error && error.cancelled) {
+      var existingModsOnCancel = s.apkMods || [];
+      setState({
+        apkState: existingModsOnCancel.length > 0 ? 'complete' : 'loaded',
+        apkCancelRequested: false,
+        apkAttempt: 0,
+        apkMaxAttempts: 3,
+        apkProgressMsg: '',
+      });
+      showToast('Analysis cancelled.');
+      return;
+    }
     console.error('APK analysis error:', error);
     var safeMsg = '';
     try {

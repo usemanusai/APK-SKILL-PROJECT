@@ -751,6 +751,7 @@ function exportSkillMd(mode) {
     skillMdGenerating: true,
     skillMdResult: null,
     skillMdEditedContent: null,   // clear any previous manual edits when regenerating
+    apkCancelRequested: false,
     apkFile: currentApkFile,
     apkManifest: currentManifest,
     apkMods: currentMods,
@@ -829,6 +830,21 @@ function exportSkillMd(mode) {
       });
     }
   }).catch(function(err) {
+    if (err && err.cancelled) {
+      var existingModsOnCancel = currentMods;
+      setState({
+        apkState: existingModsOnCancel.length > 0 ? 'complete' : 'loaded',
+        apkCancelRequested: false,
+        apkProgressMsg: '',
+        skillMdGenerating: false,
+        apkFile: currentApkFile,
+        apkManifest: currentManifest,
+        apkMods: currentMods,
+        apkAppliedMods: currentApplied
+      });
+      if (typeof showToast === 'function') showToast('SKILL.md generation cancelled.');
+      return;
+    }
     console.error('SKILL.md autonomous workflow error:', err);
     if (typeof showToast === 'function') showToast(t('app.apk.skillMdFailed', { error: err.message || 'Workflow failed' }));
     setState({
